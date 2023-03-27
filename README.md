@@ -1,5 +1,4 @@
-Welcome to the lptorch wiki!
-
+# lptorch
 lptorch is CUDA extension library of pytorch for low precision neural network training / inference.
 
 We developed lptorch to verify NPU (real hardware), so it use only 2^N scale factor which can be implemented with bit shift operation in hardware.

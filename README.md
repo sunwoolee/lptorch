@@ -16,7 +16,7 @@ make run
 ```
 
 # Installation with multiple CUDA architectures
-Check your GPU compute capability in https://developer.nvidia.com/cuda-gpus#compute  
+Check your GPU compute capability at https://developer.nvidia.com/cuda-gpus#compute  
 ```
 export TORCH_CUDA_ARCH_LIST="{your GPU compute capability}"
 # export TORCH_CUDA_ARCH_LIST="6.1 7.5 8.6"

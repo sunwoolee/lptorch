@@ -21,6 +21,6 @@ Check your GPU compute capability at https://developer.nvidia.com/cuda-gpus#comp
 export TORCH_CUDA_ARCH_LIST="{your GPU compute capability}"
 # export TORCH_CUDA_ARCH_LIST="6.1 7.5 8.6"
 ```
-Follow 'Installation' in the latest cuda architecture environment.  
+Follow **Installation** in the latest cuda architecture environment.  
 
 See the [wiki](https://github.com/sunwoolee/lptorch/wiki) for more information on the package.

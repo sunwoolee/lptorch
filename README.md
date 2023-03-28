@@ -23,4 +23,4 @@ export TORCH_CUDA_ARCH_LIST="{your GPU compute capability}"
 ```
 Follow **Installation** in the latest cuda architecture environment.  
 
-See the [wiki](https://github.com/sunwoolee/lptorch/wiki) for more information on the package.
+See the [wiki](https://github.com/sunwoolee/lptorch/wiki) for more information about the package.

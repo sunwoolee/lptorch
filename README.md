@@ -8,7 +8,7 @@ We developed lptorch to verify NPU (real hardware), so it use only $2^N$ scale f
 * onnx
 
 # Installation
-```
+```bash
 git clone https://github.com/sunwoolee/lptorch.git
 cd lptorch
 make clean
@@ -17,7 +17,7 @@ make run
 
 # Installation with multiple CUDA architectures
 Check your GPU compute capability at https://developer.nvidia.com/cuda-gpus#compute  
-```
+```bash
 export TORCH_CUDA_ARCH_LIST="{your GPU compute capability}"
 # export TORCH_CUDA_ARCH_LIST="6.1 7.5 8.6"
 ```

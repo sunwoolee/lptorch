@@ -54,8 +54,8 @@ class Quantized_Model(torch.nn.Module):
     def forward(self, *args, **kwargs):
         return self.lp_module(*args, **kwargs)
 
-    def train(self):
-        self.lp_module.train()
+    def train(self, mode = True):
+        self.lp_module.train(mode)
         for bn in self.merged_bn:
             bn.eval()
 

@@ -42,25 +42,39 @@ class Quantized_Model(torch.nn.Module):
         # make master copy & previous quant value
         self.master = {}
         self.previous = {}
+        self.quant_dict = {}
         for k,v in self.base_parameters.items():
             self.master[k] = v.data.clone()
             self.previous[k] = v.data.clone()
+            self.quant_dict[k] = None
         self.bias_master = {}
         self.bias_previous = {}
         for k,v in self.bias_parameters.items():
             self.bias_master[k] = v.data.clone()
             self.bias_previous[k] = v.data.clone()
+            self.quant_dict[k] = None
 
     def forward(self, *args, **kwargs):
         return self.lp_module(*args, **kwargs)
 
-    def train(self, mode = True):
-        self.lp_module.train(mode)
+    def train(self):
+        self.lp_module.train()
         for bn in self.merged_bn:
             bn.eval()
 
     def eval(self):
         self.lp_module.eval()
+
+    def set_quant(self, params, quant):
+        for param in params:
+            for k,v in self.base_parameters.items():
+                if torch.equal(param, v):
+                    self.quant_dict[k] = quant
+                    break
+            for k,v in self.bias_parameters.items():
+                if torch.equal(param, v):
+                    self.quant_dict[k] = quant
+                    break
 
     def parameter_quantize(self):
         from .major import weight_quant, bias_quant, hysteresis_update
@@ -70,16 +84,35 @@ class Quantized_Model(torch.nn.Module):
             self.bias_master[k].data = v.clone().data
         if weight_quant is not None:
             for k,v in self.master.items():
+                if self.quant_dict[k] is not None:
+                    continue
                 if hysteresis_update:
-                    self.base_parameters[k].data = weight_quant.hysteresis(self.previous[k].data, v.clone()).data
+                    self.base_parameters[k].data = weight_quant.hysteresis(self.previous[k].data.to(v.device), v.clone()).data
                 else:
                     self.base_parameters[k].data = weight_quant.quantize(v.clone()).data
         if bias_quant is not None:
             for k,v in self.bias_master.items():
+                if self.quant_dict[k] is not None:
+                    continue
                 if hysteresis_update:
-                    self.bias_parameters[k].data = bias_quant.hysteresis(self.bias_previous[k].data, v.clone()).data
+                    self.bias_parameters[k].data = bias_quant.hysteresis(self.bias_previous[k].data.to(v.device), v.clone()).data
                 else:
                     self.bias_parameters[k].data = bias_quant.quantize(v.clone()).data
+        # custom quant
+        for k,v in self.master.items():
+            if self.quant_dict[k] is None:
+                continue
+            if hysteresis_update:
+                self.base_parameters[k].data = self.quant_dict[k].hysteresis(self.previous[k].data.to(v.device), v.clone()).data
+            else:
+                self.base_parameters[k].data = self.quant_dict[k].quantize(v.clone()).data
+        for k,v in self.bias_master.items():
+            if self.quant_dict[k] is None:
+                continue
+            if hysteresis_update:
+                self.bias_parameters[k].data = self.quant_dict[k].hysteresis(self.bias_previous[k].data.to(v.device), v.clone()).data
+            else:
+                self.bias_parameters[k].data = self.quant_dict[k].quantize(v.clone()).data
 
     def parameter_recover(self):
         for k,v in self.master.items():

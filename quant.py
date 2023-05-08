@@ -48,6 +48,12 @@ class quant():
         self.stochastic = stochastic
         self.ch_wise = ch_wise
         self.ch_dim = ch_dim
+        if isinstance(ch_dim, list):
+            tmp = -1
+            for ch in ch_dim:
+                if tmp >= ch:
+                    raise Exception("When ch_dim is list object, elements must be in ascending order")
+                tmp = ch
 
     def quantize(self, input, scale=None, room=None):
         if self.tracking is False:

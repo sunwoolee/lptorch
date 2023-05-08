@@ -1,5 +1,5 @@
 import torch
-from .major import linear_quantize, custom_fp_quantize, fp_quantize, linear_hysteresis, custom_fp_hysteresis, fp_hysteresis, binary_quantize, binary_hysteresis
+from .major import linear_quantize, custom_fp_quantize, fp_quantize, linear_hysteresis, custom_fp_hysteresis, fp_hysteresis, binary_quantize, binary_hysteresis, ternary_quantize, ternary_hysteresis
 
 class qformat():
     def __init__(self, format_type):
@@ -11,6 +11,10 @@ class qformat():
 class binary_format(qformat):
     def __init__(self):
         super().__init__('binary')
+
+class ternary_format(qformat):
+    def __init__(self):
+        super().__init__('ternary')
 
 class linear_format(qformat):
     def __init__(self, bit_num, unsigned=False):
@@ -68,6 +72,8 @@ class quant():
             return fp_quantize(input, self.qformat.exp_bit, self.qformat.man_bit, self.qformat.bias, self.stochastic)
         elif self._type == 'binary':
             return binary_quantize(input, self.stochastic, self.ch_wise, self.ch_dim)
+        elif self._type == 'ternary':
+            return ternary_quantize(input, self.stochastic, self.ch_wise, self.ch_dim)
         
     def hysteresis(self, pre_input, input, scale=None, room=None):
         if self.tracking is False:
@@ -82,3 +88,5 @@ class quant():
             return fp_hysteresis(pre_input, input, self.qformat.exp_bit, self.qformat.man_bit, self.qformat.bias)
         elif self._type == 'binary':
             return binary_hysteresis(pre_input, input, self.ch_wise, self.ch_dim)
+        elif self._type == 'ternary':
+            return ternary_hysteresis(pre_input, input, self.ch_wise, self.ch_dim)

@@ -200,28 +200,56 @@ def set_hysteresis_update(value):
 	else:
 		print('type of hysteresis_update must be bool')
 
+def ch_total(tensor, ch_dim):
+    dim = 1
+    if isinstance(ch_dim, list):
+        for ch in ch_dim:
+            dim *= tensor.shape[ch]
+    else:
+        dim = tensor.shape[ch_dim]
+    return dim
+
+def ch_swapaxes(tensor, ch_dim):
+    if isinstance(ch_dim, list):
+        for idx, ch in enumerate(ch_dim):
+            tensor = tensor.swapaxes(idx, ch)
+    else:
+        tensor = tensor.swapaxes(0, ch_dim)
+    return tensor
+
+def ch_recovery(tensor, ch_dim):
+    if isinstance(ch_dim, list):
+        for idx, ch in enumerate(reversed(ch_dim)):
+            tensor = tensor.swapaxes(len(ch_dim)-1-idx, ch)
+    else:
+        tensor = tensor.swapaxes(0, ch_dim)
+    return tensor
+
 def binary_quantize(tensor, stochastic, ch_wise, ch_dim):
-	if ch_wise:
-		scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).mean(1)
-	else:
-		scale = tensor.abs().mean()
-	if stochastic:
-		rand = torch.rand_like(scale).add(scale.log2())
-		scale = torch.where(scale>0, rand.floor(), scale).int()
-	else:
-		scale = torch.where(scale>0, scale.log2().round(), scale).int()
-	tensor = torch.where(tensor>0, tensor.mul(0).add(1), tensor.mul(0).add(-1))
-	if ch_wise:
-		tensor = tensor.swapaxes(ch_dim, tensor.dim()-1).mul(torch.pow(2,scale.float())).swapaxes(tensor.dim()-1, ch_dim)
-	else:
-		tensor = tensor.mul(torch.pow(2,scale.float()))
-	tensor.scale = scale
-	return tensor
+    if ch_wise:
+        scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).mean(1)
+    else:
+        scale = tensor.abs().mean()
+    if stochastic:
+        rand = torch.rand_like(scale).add(scale.log2())
+        scale = torch.where(scale>0, rand.floor(), scale).int()
+    else:
+        scale = torch.where(scale>0, scale.log2().round(), scale).int()
+    tensor = torch.where(tensor>0, tensor.mul(0).add(1), tensor.mul(0).add(-1))
+    if ch_wise:
+        tensor = ch_swapaxes(tensor, ch_dim)
+        shape = tensor.shape
+        tensor = tensor.reshape(ch_total(tensor, ch_dim), -1).swapaxes(0,1).mul(torch.pow(2,scale.float())).swapaxes(0,1).reshape(shape)
+        tensor = ch_recovery(tensor, ch_dim)
+    else:
+        tensor = tensor.mul(torch.pow(2,scale.float()))
+    tensor.scale = scale
+    return tensor
 
 def binary_hysteresis(pre_tensor, tensor, ch_wise, ch_dim):
 	if ch_wise:
-		pre_scale = pre_tensor.abs().swapaxes(0, ch_dim).reshape(pre_tensor.shape[ch_dim],-1).max(1)[0]
-		scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).mean(1)
+		pre_scale = ch_swapaxes(pre_tensor.abs(), ch_dim).reshape(ch_total(pre_tensor, ch_dim),-1).max(1)[0]
+		scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).mean(1)
 	else:
 		pre_scale = pre_tensor.abs().max()
 		scale = tensor.abs().mean()
@@ -230,7 +258,10 @@ def binary_hysteresis(pre_tensor, tensor, ch_wise, ch_dim):
 	scale = torch.where(scale > pre_scale, scale.floor(), scale.ceil()).int()
 	tensor = torch.where(tensor>0, tensor.mul(0).add(1), tensor.mul(0).add(-1))
 	if ch_wise:
-		tensor = tensor.swapaxes(ch_dim, tensor.dim()-1).mul(torch.pow(2,scale.float())).swapaxes(tensor.dim()-1, ch_dim)
+		tensor = ch_swapaxes(tensor, ch_dim)
+		shape = tensor.shape
+		tensor = tensor.reshape(ch_total(tensor, ch_dim), -1).swapaxes(0,1).mul(torch.pow(2,scale.float())).swapaxes(0,1).reshape(shape)
+		tensor = ch_recovery(tensor, ch_dim)
 	else:
 		tensor = tensor.mul(torch.pow(2,scale.float()))
 	tensor.scale = scale
@@ -241,7 +272,7 @@ def linear_quantize(tensor, scale, bit_num, room, stochastic, ch_wise, ch_dim, u
 		tensor = torch.where(tensor<0, tensor.mul(0), tensor)
 	if scale is None:
 		if ch_wise:
-			scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).max(1)[0]
+			scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).max(1)[0]
 		else:
 			scale = tensor.abs().max()
 		scale = torch.where(scale>0, scale.log2().floor(), scale)
@@ -254,7 +285,7 @@ def linear_quantize(tensor, scale, bit_num, room, stochastic, ch_wise, ch_dim, u
 
 	cuda_id = tensor.get_device()
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
+		tensor = ch_swapaxes(tensor, ch_dim)
 	shape = tensor.shape
 	tensor = tensor.reshape(-1)
 	overflow = torch.empty(tensor.size(), dtype=torch.bool, device=tensor.device)
@@ -266,9 +297,9 @@ def linear_quantize(tensor, scale, bit_num, room, stochastic, ch_wise, ch_dim, u
 		lptorch_cuda.linear_quantize(cuda_id, tensor, bit_num, scale, overflow, underflow, room)
 	tensor = tensor.reshape(shape)
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
-		overflow = overflow.reshape(shape[0],-1).max(1)[0].int()
-		underflow = underflow.reshape(shape[0],-1).max(1)[0].int()
+		tensor = ch_recovery(tensor, ch_dim)
+		overflow = overflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
+		underflow = underflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
 		overflow = torch.where(overflow>0, overflow, overflow.mul(0).add(underflow-1))
 		scale.add_(overflow)
 	else:
@@ -282,7 +313,7 @@ def linear_hysteresis(pre_tensor, tensor, scale, bit_num, room, ch_wise, ch_dim,
 		tensor = torch.where(tensor<0, tensor.mul(0), tensor)
 	if scale is None:
 		if ch_wise:
-			scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).max(1)[0]
+			scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).max(1)[0]
 		else:
 			scale = tensor.abs().max()
 		scale = torch.where(scale>0, scale.log2().floor(), scale)
@@ -294,7 +325,7 @@ def linear_hysteresis(pre_tensor, tensor, scale, bit_num, room, ch_wise, ch_dim,
 			scale.data = scale.repeat(tensor.shape[ch_dim]).data
 	cuda_id = tensor.get_device()
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
+		tensor = ch_swapaxes(tensor, ch_dim)
 	shape = tensor.shape
 	tensor = tensor.reshape(-1)
 	pre_tensor = pre_tensor.reshape(-1)
@@ -303,9 +334,9 @@ def linear_hysteresis(pre_tensor, tensor, scale, bit_num, room, ch_wise, ch_dim,
 	lptorch_cuda.linear_hysteresis(cuda_id, pre_tensor, tensor, bit_num, scale, overflow, underflow, room)
 	tensor = tensor.reshape(shape)
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
-		overflow = overflow.reshape(shape[0],-1).max(1)[0].int()
-		underflow = underflow.reshape(shape[0],-1).max(1)[0].int()
+		tensor = ch_recovery(tensor, ch_dim)
+		overflow = overflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
+		underflow = underflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
 		overflow = torch.where(overflow>0, overflow, overflow.mul(0).add(underflow-1))
 		scale.add_(overflow)
 	else:
@@ -317,7 +348,7 @@ def linear_hysteresis(pre_tensor, tensor, scale, bit_num, room, ch_wise, ch_dim,
 def custom_fp_quantize(tensor, scale, man, room, stochastic, ch_wise, ch_dim):
 	if scale is None:
 		if ch_wise:
-			scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).max(1)[0]
+			scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).max(1)[0]
 		else:
 			scale = tensor.abs().max()
 		scale = torch.where(scale>0, scale.log2().floor(), scale)
@@ -329,7 +360,7 @@ def custom_fp_quantize(tensor, scale, man, room, stochastic, ch_wise, ch_dim):
 			scale.data = scale.repeat(tensor.shape[ch_dim]).data
 	cuda_id = tensor.get_device()
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
+		tensor = ch_swapaxes(tensor, ch_dim)
 	shape = tensor.shape
 	tensor = tensor.reshape(-1)
 	overflow = torch.empty(tensor.size(), dtype=torch.bool, device=tensor.device)
@@ -341,9 +372,9 @@ def custom_fp_quantize(tensor, scale, man, room, stochastic, ch_wise, ch_dim):
 		lptorch_cuda.custom_fp_quantize(cuda_id, tensor, man, scale, overflow, underflow, room)
 	tensor = tensor.reshape(shape)
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
-		overflow = overflow.reshape(shape[0],-1).max(1)[0].int()
-		underflow = underflow.reshape(shape[0],-1).max(1)[0].int()
+		tensor = ch_recovery(tensor, ch_dim)
+		overflow = overflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
+		underflow = underflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
 		overflow = torch.where(overflow>0, overflow, overflow.mul(0).add(underflow-1))
 		scale.add_(overflow)
 	else:
@@ -355,7 +386,7 @@ def custom_fp_quantize(tensor, scale, man, room, stochastic, ch_wise, ch_dim):
 def custom_fp_hysteresis(pre_tensor, tensor, scale, man, room, ch_wise, ch_dim):
 	if scale is None:
 		if ch_wise:
-			scale = tensor.abs().swapaxes(0, ch_dim).reshape(tensor.shape[ch_dim],-1).max(1)[0]
+			scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).max(1)[0]
 		else:
 			scale = tensor.abs().max()
 		scale = torch.where(scale>0, scale.log2().floor(), scale)
@@ -367,7 +398,7 @@ def custom_fp_hysteresis(pre_tensor, tensor, scale, man, room, ch_wise, ch_dim):
 			scale.data = scale.repeat(tensor.shape[ch_dim]).data
 	cuda_id = tensor.get_device()
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
+		tensor = ch_swapaxes(tensor, ch_dim)
 	shape = tensor.shape
 	tensor = tensor.reshape(-1)
 	pre_tensor = pre_tensor.reshape(-1)
@@ -376,9 +407,9 @@ def custom_fp_hysteresis(pre_tensor, tensor, scale, man, room, ch_wise, ch_dim):
 	lptorch_cuda.custom_fp_hysteresis(cuda_id, pre_tensor, tensor, man, scale, overflow, underflow, room)
 	tensor = tensor.reshape(shape)
 	if ch_wise:
-		tensor = tensor.swapaxes(0, ch_dim)
-		overflow = overflow.reshape(shape[0],-1).max(1)[0].int()
-		underflow = underflow.reshape(shape[0],-1).max(1)[0].int()
+		tensor = ch_recovery(tensor, ch_dim)
+		overflow = overflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
+		underflow = underflow.reshape(ch_total(tensor, ch_dim),-1).max(1)[0].int()
 		overflow = torch.where(overflow>0, overflow, overflow.mul(0).add(underflow-1))
 		scale.add_(overflow)
 	else:

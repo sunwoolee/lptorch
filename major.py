@@ -267,6 +267,52 @@ def binary_hysteresis(pre_tensor, tensor, ch_wise, ch_dim):
 	tensor.scale = scale
 	return tensor
 
+def ternary_quantize(tensor, stochastic, ch_wise, ch_dim):
+	if ch_wise:
+		scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).mean(1)
+	else:
+		scale = tensor.abs().mean()
+	if stochastic:
+		rand = torch.rand_like(scale).add(scale.log2())
+		scale = torch.where(scale>0, rand.floor(), scale).int()
+	else:
+		scale = torch.where(scale>0, scale.log2().round(), scale).int()
+	tensor_2 = tensor.mul(2)
+	tensor = torch.where(tensor>0, tensor.mul(0).add(1), tensor.mul(0).add(-1))
+	if ch_wise:
+		tensor = ch_swapaxes(tensor, ch_dim)
+		shape = tensor.shape
+		tensor = tensor.reshape(ch_total(tensor, ch_dim), -1).swapaxes(0,1).mul(torch.pow(2,scale.float())).swapaxes(0,1).reshape(shape)
+		tensor = ch_recovery(tensor, ch_dim)
+	else:
+		tensor = tensor.mul(torch.pow(2,scale.float()))
+	tensor = torch.where(tensor.abs()>tensor_2.abs(), tensor.mul(0), tensor)
+	tensor.scale = scale
+	return tensor
+
+def ternary_hysteresis(pre_tensor, tensor, ch_wise, ch_dim):
+	if ch_wise:
+		pre_scale = ch_swapaxes(pre_tensor.abs(), ch_dim).reshape(ch_total(pre_tensor, ch_dim),-1).max(1)[0]
+		scale = ch_swapaxes(tensor.abs(), ch_dim).reshape(ch_total(tensor, ch_dim),-1).mean(1)
+	else:
+		pre_scale = pre_tensor.abs().max()
+		scale = tensor.abs().mean()
+	pre_scale = torch.where(pre_scale>0, pre_scale.log2(), pre_scale)
+	scale = torch.where(scale>0, scale.log2(), scale)
+	scale = torch.where(scale > pre_scale, scale.floor(), scale.ceil()).int()
+	tensor_2 = tensor.mul(2)
+	tensor = torch.where(tensor>0, tensor.mul(0).add(1), tensor.mul(0).add(-1))
+	if ch_wise:
+		tensor = ch_swapaxes(tensor, ch_dim)
+		shape = tensor.shape
+		tensor = tensor.reshape(ch_total(tensor, ch_dim), -1).swapaxes(0,1).mul(torch.pow(2,scale.float())).swapaxes(0,1).reshape(shape)
+		tensor = ch_recovery(tensor, ch_dim)
+	else:
+		tensor = tensor.mul(torch.pow(2,scale.float()))
+	tensor = torch.where(tensor.abs()>tensor_2.abs(), tensor.mul(0), tensor)
+	tensor.scale = scale
+	return tensor
+
 def linear_quantize(tensor, scale, bit_num, room, stochastic, ch_wise, ch_dim, unsigned):
 	if unsigned:
 		tensor = torch.where(tensor<0, tensor.mul(0), tensor)

@@ -7,7 +7,7 @@ setup(
     packages=['lptorch'],
     #package_dir={'fp8': 'C:\\Users\\User\\8bit_training\\cuda\\'},
     package_dir={'lptorch': './'},
-    py_modules=['__init__','major','modules','optim', 'quant', 'functions', 'model_wrapper'],
+    py_modules=['__init__','major','modules','optim', 'quant', 'functions', 'model_wrapper', 'analysis'],
     ext_modules=[
         CUDAExtension('lptorch_cuda', [
             'bind.cpp',

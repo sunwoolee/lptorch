@@ -12,6 +12,7 @@ grad_quant = None
 master_quant = None
 
 hysteresis_update = False
+track_distribution = False
 
 torch.manual_seed(0)
 
@@ -199,6 +200,13 @@ def set_hysteresis_update(value):
 		hysteresis_update = value
 	else:
 		print('type of hysteresis_update must be bool')
+
+def set_track_distribution(value):
+	global track_distribution
+	if type(value) is bool:
+		track_distribution = value
+	else:
+		print('type of track_distribution must be bool')
 
 def ch_total(tensor, ch_dim):
     dim = 1
@@ -535,3 +543,20 @@ def load_state_dict(target_model, state, merged_bn=False):
 				merged_bn.append(bn)
 		target_model.merged_bn = merged_bn
 		target_model.bn_merge = True
+
+def get_distribution(data, distribution):
+	abs_data = data.abs()
+	if 'zero' in distribution.keys():
+		distribution['zero'] += torch.sum(abs_data==0)
+	else:
+		distribution['zero'] = torch.sum(abs_data==0)
+	scale = abs_data[abs_data>0].log2().int()
+	if scale.numel() == 0:
+		return
+	min_val = scale.min().item()
+	max_val = scale.max().item()
+	for i in range(min_val, max_val+1):
+		if str(i) in distribution.keys():
+			distribution[str(i)] += torch.sum(scale==i)
+		else:
+			distribution[str(i)] = torch.sum(scale==i)

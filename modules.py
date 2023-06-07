@@ -4,6 +4,7 @@ import torch
 from . import functions as F
 from . import quant as quant
 from torch.nn.utils.rnn import PackedSequence
+from .major import get_distribution
 import pdb
 
 class debug_func(torch.autograd.Function):
@@ -31,13 +32,17 @@ class Debug(torch.nn.Module):
     
 class qblock_func(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, scale, tracked_scale, dual, training, tracking, quantize, shortcut):
+    def forward(ctx, input, scale, tracked_scale, dual, training, tracking, quantize, shortcut, distribution):
         ctx.scale = scale
         ctx.tracked_scale = tracked_scale
         ctx.dual = dual
         ctx.tracking = tracking
         ctx.quantize = quantize
         ctx.shortcut = shortcut
+        ctx.distribution = distribution
+        from .major import track_distribution
+        if track_distribution:
+            get_distribution(input, distribution['forward'])
         if shortcut:
             from .major import shortcut_quant as activ_quant
         else:
@@ -72,6 +77,10 @@ class qblock_func(torch.autograd.Function):
         tracking = ctx.tracking
         quantize = ctx.quantize
         shortcut = ctx.shortcut
+        distribution = ctx.distribution
+        from .major import track_distribution
+        if track_distribution:
+            get_distribution(grad_output, distribution['backward'])
         if shortcut:
             from .major import shortcut_error_quant as error_quant
         else:
@@ -93,7 +102,7 @@ class qblock_func(torch.autograd.Function):
             else:
                 grad_input = error_quant.quantize(grad_output, room)
             scale[1].data = grad_input.scale.clone().data
-        return grad_input, None, None, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None, None, None
 
 class QBlock(torch.nn.Module):
     def __init__(self, dual, fixed_scale, tracking, quantize, shortcut):
@@ -103,6 +112,7 @@ class QBlock(torch.nn.Module):
         self.tracking = tracking
         self.quantize = quantize
         self.shortcut = shortcut
+        self.distribution = {'forward':{}, 'backward':{}}
         for i in range(2):
             if fixed_scale[i] is None:
                 self.register_buffer('scale'+str(i+1), torch.tensor([0], dtype=torch.int))
@@ -120,7 +130,7 @@ class QBlock(torch.nn.Module):
                 scale.append(getattr(self, 'scale'+str(i+1)).clone())
             tracked_scale.append(getattr(self, 'tracked_scale'+str(i+1)))
 
-        return qblock_func.apply(input, scale, tracked_scale, self.dual, self.training, self.tracking, self.quantize, self.shortcut)
+        return qblock_func.apply(input, scale, tracked_scale, self.dual, self.training, self.tracking, self.quantize, self.shortcut, self.distribution)
 
 class QLayer(torch.nn.Module):
     def __init__(self, module=None, function=None, dual=[False, False], fixed_scale=[None, None], tracking=[True, True], quantize=[True, True], shortcut=False):
@@ -128,7 +138,7 @@ class QLayer(torch.nn.Module):
         self.lp_module = module
         self.function = function
         self.qblock = QBlock(dual, fixed_scale, tracking, quantize, shortcut)
-
+        
     def forward(self, a):
         if self.lp_module is not None:
             a = self.lp_module(a)
@@ -207,7 +217,10 @@ class WQLayer(torch.nn.Module):
 
 class qadd_func(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, a, b, scale, training, shortcut):
+    def forward(ctx, a, b, scale, training, shortcut, distribution):
+        from .major import track_distribution
+        if track_distribution:
+            get_distribution(a.add(b), distribution['forward'])
         if shortcut:
             from .major import shortcut_quant as activ_quant
         else:
@@ -221,32 +234,39 @@ class qadd_func(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, grad_output, None, None, None
+        return grad_output, grad_output, None, None, None, None
 
 class QAdd(torch.nn.Module):
     def __init__(self, shortcut=False):
         super().__init__()
         self.shortcut = shortcut
         self.register_buffer('scale1', torch.tensor([0], dtype=torch.int))
+        self.distribution = {'forward':{}}
 
     def forward(self, a, b):
         scale = [self.scale1]
-        return qadd_func.apply(a, b, scale, self.training, self.shortcut)
+        return qadd_func.apply(a, b, scale, self.training, self.shortcut, self.distribution)
         
 class qclone_func(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, a, scale, shortcut):
+    def forward(ctx, a, scale, shortcut, distribution):
         b = a.clone().detach()
         if hasattr(a, 'scale') and a.scale is not None:
             b.scale = a.scale.clone().detach()
         ctx.scale = scale
         ctx.shortcut = shortcut
+        ctx.distribution = distribution
         return a, b
 
     @staticmethod
     def backward(ctx, grad_output1, grad_output2):
         scale = ctx.scale
         shortcut = ctx.shortcut
+        distribution = ctx.distribution
+        from .major import track_distribution
+        if track_distribution:
+            get_distribution(grad_output1, distribution['backward1'])
+            get_distribution(grad_output2, distribution['backward2'])
         if shortcut:
             from .major import shortcut_error_quant as error_quant
         else:
@@ -257,7 +277,7 @@ class qclone_func(torch.autograd.Function):
         grad_output2 = error_quant.quantize(grad_output2, scale[1])
         
         grad_input = grad_output1.add(grad_output2)
-        return grad_input, None, None
+        return grad_input, None, None, None
 
 class QClone(torch.nn.Module):
     def __init__(self, shortcut=False):
@@ -265,12 +285,13 @@ class QClone(torch.nn.Module):
         self.shortcut = shortcut
         for i in range(2):
             self.register_buffer('scale'+str(i+1), torch.tensor([0], dtype=torch.int))
+        self.distribution = {'backward1':{}, 'backward2':{}}
 
     def forward(self, a):
         scale = []
         for i in range(2):
             scale.append(getattr(self, 'scale'+str(i+1)))
-        return qclone_func.apply(a, scale, self.shortcut)
+        return qclone_func.apply(a, scale, self.shortcut, self.distribution)
         
 class batch_norm2d(torch.autograd.Function):
     @staticmethod

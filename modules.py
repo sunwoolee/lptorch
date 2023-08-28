@@ -32,7 +32,7 @@ class Debug(torch.nn.Module):
     
 class qblock_func(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, scale, tracked_scale, dual, training, tracking, quantize, shortcut, distribution):
+    def forward(ctx, input, scale, tracked_scale, dual, training, tracking, quantize, shortcut, distribution, quant_type):
         ctx.scale = scale
         ctx.tracked_scale = tracked_scale
         ctx.dual = dual
@@ -56,16 +56,16 @@ class qblock_func(torch.autograd.Function):
         forward_scale = scale[0].clone()
         if tracking[0]:
             if dual[0]:
-                output = activ_quant.quantize(input.clone(), scale[0], room)
-                output.add_(activ_quant.quantize(input.add(-output), forward_scale))
+                output = activ_quant.quantize(input.clone(), scale[0], room, quant_type=quant_type)
+                output.add_(activ_quant.quantize(input.add(-output), forward_scale, quant_type=quant_type))
             else:
-                output = activ_quant.quantize(input, scale[0], room)
+                output = activ_quant.quantize(input, scale[0], room, quant_type=quant_type)
         else:
             if dual[0]:
-                output = activ_quant.quantize(input.clone(), room)
-                output.add_(activ_quant.quantize(input.add(-output)))
+                output = activ_quant.quantize(input.clone(), room, quant_type=quant_type)
+                output.add_(activ_quant.quantize(input.add(-output), quant_type=quant_type))
             else:
-                output = activ_quant.quantize(input, room)
+                output = activ_quant.quantize(input, room, quant_type=quant_type)
             scale[0].data = output.scale.clone().data
         return output
 
@@ -86,7 +86,7 @@ class qblock_func(torch.autograd.Function):
         else:
             from .major import error_quant
         if error_quant is None or quantize[1] is False:
-            return grad_output, None, None, None, None, None, None, None, None
+            return grad_output, None, None, None, None, None, None, None, None, None
         room = None
         backward_scale = scale[1].clone()
         if tracking[1]:
@@ -102,7 +102,7 @@ class qblock_func(torch.autograd.Function):
             else:
                 grad_input = error_quant.quantize(grad_output, room)
             scale[1].data = grad_input.scale.clone().data
-        return grad_input, None, None, None, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None, None, None, None
 
 class QBlock(torch.nn.Module):
     def __init__(self, dual, fixed_scale, tracking, quantize, shortcut):
@@ -113,6 +113,7 @@ class QBlock(torch.nn.Module):
         self.quantize = quantize
         self.shortcut = shortcut
         self.distribution = {'forward':{}, 'backward':{}}
+        self.register_buffer('qtype', torch.tensor([-1], dtype=torch.int))
         for i in range(2):
             if fixed_scale[i] is None:
                 self.register_buffer('scale'+str(i+1), torch.tensor([0], dtype=torch.int))
@@ -130,7 +131,7 @@ class QBlock(torch.nn.Module):
                 scale.append(getattr(self, 'scale'+str(i+1)).clone())
             tracked_scale.append(getattr(self, 'tracked_scale'+str(i+1)))
 
-        return qblock_func.apply(input, scale, tracked_scale, self.dual, self.training, self.tracking, self.quantize, self.shortcut, self.distribution)
+        return qblock_func.apply(input, scale, tracked_scale, self.dual, self.training, self.tracking, self.quantize, self.shortcut, self.distribution, self.qtype)
 
 class QLayer(torch.nn.Module):
     def __init__(self, module=None, function=None, dual=[False, False], fixed_scale=[None, None], tracking=[True, True], quantize=[True, True], shortcut=False):
@@ -353,6 +354,33 @@ class BatchNorm2d(torch.nn.BatchNorm2d):
         self._check_input_dim(input)
         return batch_norm2d.apply(input, self.running_mean, self.running_var, self.weight, self.bias,
                 self.training, self.track_running_stats, self.momentum, self.eps)
+
+class QLayerNorm(torch.nn.Module):
+    def __init__(self, d_hid, eps=1e-06, dual=[False, False], fixed_scale=[None, None], tracking=[True, True], quantize=[True, True], shortcut=False):
+        super(QLayerNorm, self).__init__()
+        self.weight = torch.nn.Parameter(torch.ones(d_hid))
+        self.bias = torch.nn.Parameter(torch.zeros(d_hid))
+        self.eps = eps
+        self.qblock1 = QBlock(dual, fixed_scale, tracking, quantize, shortcut)
+        self.qblock2 = QBlock(dual, fixed_scale, tracking, quantize, shortcut)
+        
+    def forward(self, input):
+        mu = input.mean(dim=-1, keepdim=True)
+        var = torch.var(input, dim=-1, keepdim=True, unbiased=False)
+        sqrt = torch.sqrt(var+self.eps).reciprocal()
+        first_mul = sqrt
+        first_add = -mu.mul(sqrt)
+        with torch.no_grad():
+            first_mul.data = first_mul.bfloat16().float().data
+            first_add.data = first_add.bfloat16().float().data
+        input = self.qblock1(input.mul(first_mul).add(first_add))
+        second_mul = self.weight
+        second_add = self.bias
+        with torch.no_grad():
+            second_mul.data = second_mul.bfloat16().float().data
+            second_add.data = second_add.bfloat16().float().data
+        input = self.qblock2(input.mul(second_mul).add(second_add))
+        return input
 
 class layer_norm(torch.autograd.Function):
     @staticmethod
